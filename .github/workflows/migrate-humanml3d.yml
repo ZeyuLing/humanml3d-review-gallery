@@ -1,0 +1,74 @@
+name: Migrate complete HumanML3D viewer
+on:
+  push:
+    paths: ['.github/workflows/migrate-humanml3d.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: humanml3d-migration
+  cancel-in-progress: false
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy and verify complete site into this independent repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os,pathlib,subprocess,tempfile,urllib.request,json,base64,hashlib,concurrent.futures,time
+          source='ZeyuLing/babel-review-gallery'
+          source_sha='c6f0d38dd025b700117f7749a7f8df40b29031b7'
+          target=os.environ['GITHUB_REPOSITORY']
+          assert target=='ZeyuLing/humanml3d-review-gallery',target
+          root=pathlib.Path(tempfile.mkdtemp(prefix='humanml3d-site-'))
+          token=os.environ['GH_TOKEN']
+          headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json'}
+          def api(path):
+              req=urllib.request.Request('https://api.github.com/'+path,headers=headers)
+              with urllib.request.urlopen(req,timeout=120) as r:return json.load(r)
+          tree=api(f'repos/{source}/git/trees/{source_sha}?recursive=1')
+          assert not tree.get('truncated')
+          files=[f for f in tree['tree'] if f['type']=='blob']
+          assert len(files)==1869,len(files)
+          def download(f):
+              relative=pathlib.PurePosixPath(f['path'])
+              assert not relative.is_absolute() and '..' not in relative.parts
+              p=root/f['path'];p.parent.mkdir(parents=True,exist_ok=True)
+              for attempt in range(5):
+                  try:
+                      with urllib.request.urlopen(f'https://raw.githubusercontent.com/{source}/{source_sha}/{f["path"]}',timeout=120) as r:data=r.read()
+                      digest=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+                      assert digest==f['sha'],f['path']
+                      p.write_bytes(data);return
+                  except Exception:
+                      if attempt==4:raise
+                      time.sleep(2**attempt)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+              for n,_ in enumerate(pool.map(download,files)):
+                  if n%100==0:print('Verified files:',n,flush=True)
+          # Preserve this repository's migration workflow; never import source Git history.
+          wf=pathlib.Path('.github/workflows/migrate-humanml3d.yml')
+          (root/wf).parent.mkdir(parents=True,exist_ok=True);(root/wf).write_bytes(wf.read_bytes())
+          auth='AUTHORIZATION: basic '+base64.b64encode(('x-access-token:'+token).encode()).decode()
+          env=dict(os.environ,GIT_CONFIG_COUNT='1',GIT_CONFIG_KEY_0='http.https://github.com/.extraheader',GIT_CONFIG_VALUE_0=auth)
+          def git(*args):return subprocess.run(['git',*args],cwd=root,env=env,check=True,stdout=subprocess.DEVNULL)
+          git('init','-b','main');git('config','user.name','Anonymous qualitative viewer');git('config','user.email','anonymous@users.noreply.github.com')
+          git('remote','add','origin',f'https://github.com/{target}.git')
+          git('fetch','--depth=1','origin','main');git('reset','--mixed','FETCH_HEAD')
+          for p in root.iterdir():
+              if p.name not in {'.git','assets'}:git('add',p.name)
+          git('commit','-m','Add standalone HumanML3D qualitative comparison viewer');git('push','origin','HEAD:main')
+          methods=sorted((root/'assets').iterdir());assert len(methods)==28
+          for n in range(0,len(methods),4):
+              for p in methods[n:n+4]:git('add',str(p.relative_to(root)))
+              git('commit','-m',f'Add verified motion assets, batch {n//4+1}');git('push','origin','HEAD:main')
+          destination=api(f'repos/{target}/git/trees/main?recursive=1')
+          assert not destination.get('truncated')
+          actual={f['path']:f['sha'] for f in destination['tree'] if f['type']=='blob'}
+          for f in files:assert actual.get(f['path'])==f['sha'],f['path']
+          print('Migration verified: all 1,869 files match the tested source; 4,042 samples and 28 methods.')
+          PY
