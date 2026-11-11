@@ -16,3 +16,5 @@ The subset prioritizes initialization comparisons, the reviewer-discussed KIMODO
 Search by caption or sample ID, or use Random sample to sample the current search results. Playback defaults to real-time 1× speed; use the shared timeline and speed selector to inspect motion. Drag to orbit and scroll over a model to zoom.
 
 Motion payloads, SMPL shape corrections, and constant per-sequence floor alignment are retained. No motion smoothing was added. All runtime resources are local. Open index.html in the Anonymous GitHub website view. Third-party library license notices are retained.
+
+Assets use lossless gzip compression and one shared motion bundle per sample, avoiding downloads of unrelated samples. A current browser supporting DecompressionStream is required.
